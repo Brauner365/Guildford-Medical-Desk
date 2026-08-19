@@ -25,6 +25,12 @@
   .brand h1{font-size:16px;font-weight:700;letter-spacing:.2px}
   .brand .sub{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:2px;font-weight:600}
   .sync{font-size:11px;color:var(--mut2);display:flex;align-items:center;gap:6px}
+  .hublink{display:inline-flex;align-items:center;gap:7px;text-decoration:none;
+    background:rgba(0,224,198,.1);border:1px solid rgba(0,224,198,.35);color:var(--ink);
+    font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;padding:7px 13px;border-radius:20px;transition:.15s;margin-right:14px;}
+  .hublink:hover{background:rgba(0,224,198,.2);border-color:var(--teal);}
+  .hublink svg{width:13px;height:13px;stroke:var(--teal);fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;}
+  .headright{display:flex;align-items:center;}
   .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
   .dot.off{background:var(--red);box-shadow:0 0 8px var(--red)}
   .tabs{display:flex;gap:4px;background:var(--panel2);padding:4px;border-radius:12px;border:1px solid var(--line);margin-bottom:22px}
@@ -195,7 +201,10 @@
         <div class="sub">Guildford AFC · Injury Reporting</div>
       </div>
     </div>
-    <div class="sync"><span class="dot" id="syncDot"></span><span id="syncTxt">Synced</span></div>
+    <div class="headright">
+      <a class="hublink" href="https://brauner365.github.io/Club-Hub/"><svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg> Hub</a>
+      <div class="sync"><span class="dot" id="syncDot"></span><span id="syncTxt">Synced</span></div>
+    </div>
   </header>
 
   <div class="tabs">

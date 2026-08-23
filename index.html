@@ -211,6 +211,7 @@
     <button class="tab active" data-view="player">Report Injury</button>
     <button class="tab" data-view="coach">Team Availability<span class="badge" id="badge-coach"></span></button>
     <button class="tab" data-view="medical">Medical Triage<span class="badge" id="badge-medical"></span></button>
+    <button class="tab" data-view="messages">Player Messages<span class="badge" id="badge-messages"></span></button>
     <button class="tab" data-view="records">Player Records</button>
   </div>
 
@@ -303,10 +304,18 @@
     </div>
     <div id="rec-body"></div>
   </div>
+
+  <!-- PLAYER MESSAGES -->
+  <div class="view" id="view-messages">
+    <h2>Player messages</h2>
+    <p style="color:var(--mut);font-size:13px;margin:-6px 0 16px;line-height:1.5">Replies and updates sent by players from their app. Tap one to open the case in Triage.</p>
+    <div id="msg-list"></div>
+  </div>
 </div>
 </div>
 <div class="toast" id="toast"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const SB_URL="https://kdorepgtvgwumdggjzqm.supabase.co";
 const SB_KEY="sb_publishable_8A4Lgek4MyLLl4QUsstqGw_vFFCgkwN";
@@ -322,7 +331,9 @@ let squad=[], reports=[], notesByReport={}, painSel=null, roster={}, photos={}, 
 let seen={};              // report id -> "status|availability" last acknowledged
 let firstLoad=true;       // don't alert on the very first load of a session
 let currentView='player';
-let pending={coach:[],medical:[]}; // human-readable pending alerts per tab
+let pending={coach:[],medical:[],messages:[]}; // human-readable pending alerts per tab
+let seenNotes={};         // note id -> true, for player-reply alert detection
+let firstNoteLoad=true;
 
 function toast(m,err){const t=document.getElementById('toast');t.textContent=m;t.className='toast show'+(err?' err':'');setTimeout(()=>t.className='toast',2600);}
 function sync(ok){document.getElementById('syncDot').className='dot'+(ok?'':' off');document.getElementById('syncTxt').textContent=ok?'Synced':'Offline';}
@@ -365,12 +376,33 @@ function detectChanges(){
   updateBadges();
 }
 
+// detect new player replies across all cases -> messages alert
+function detectPlayerMessages(){
+  let playerNotes=[];
+  Object.keys(notesByReport).forEach(rid=>{
+    notesByReport[rid].forEach(n=>{ if(n.author_role==='player') playerNotes.push(Object.assign({report_id:rid},n)); });
+  });
+  if(firstNoteLoad){ playerNotes.forEach(n=>seenNotes[n.id]=true); firstNoteLoad=false; return; }
+  let freshMsgs=playerNotes.filter(n=>!seenNotes[n.id]);
+  freshMsgs.forEach(n=>{
+    seenNotes[n.id]=true;
+    const rep=reports.find(r=>r.id===n.report_id);
+    pending.messages.push({name:rep?rep.player_name:n.author, note:n.note, report_id:n.report_id});
+  });
+  if(freshMsgs.length){
+    if(currentView==='messages'){clearAlert('messages');}
+    else{chime();flashTab('messages');}
+  }
+  updateBadges();
+}
+
 function updateBadges(){
-  ['coach','medical'].forEach(v=>{
+  ['coach','medical','messages'].forEach(v=>{
     const n=pending[v].length;
     const b=document.getElementById('badge-'+v);
-    b.textContent=n>9?'9+':n;b.classList.toggle('show',n>0);
+    if(b){b.textContent=n>9?'9+':n;b.classList.toggle('show',n>0);}
     const bar=document.getElementById('alert-'+v);
+    if(!bar)return;
     if(n>0){
       const newN=pending[v].filter(x=>x.kind==='new').length;
       const updN=n-newN;
@@ -421,7 +453,7 @@ async function loadReports(){
     const u=await fetch(SB_URL+"/rest/v1/injury_updates?select=*&order=created_at.asc",{headers:H});
     const notes=await u.json();notesByReport={};
     notes.forEach(n=>{(notesByReport[n.report_id]=notesByReport[n.report_id]||[]).push(n);});
-    sync(true);detectChanges();render();
+    sync(true);detectChanges();detectPlayerMessages();render();
   }catch(e){sync(false);}
 }
 
@@ -550,7 +582,55 @@ function renderMedical(){
   }).join('');
 }
 
-function render(){renderCoach();renderMedical();}
+function render(){renderCoach();renderMedical();renderMessages();}
+
+// PLAYER MESSAGES view — all player replies, newest first, jump to case
+function renderMessages(){
+  const list=document.getElementById('msg-list');
+  if(!list)return;
+  let msgs=[];
+  Object.keys(notesByReport).forEach(rid=>{
+    notesByReport[rid].forEach(n=>{ if(n.author_role==='player') msgs.push(Object.assign({report_id:rid},n)); });
+  });
+  msgs.sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
+  if(!msgs.length){list.innerHTML='<div class="empty">No player messages yet. When a player replies from their app, it appears here.</div>';return;}
+  list.innerHTML=msgs.map(m=>{
+    const rep=reports.find(r=>r.id===m.report_id);
+    const who=rep?rep.player_name:m.author;
+    const area=rep?(rep.body_area||''):'';
+    return `<div class="case" style="cursor:pointer" onclick="jumpToCase('${m.report_id}')">
+      <div class="case-head">
+        ${photoHTML(who)}
+        <div>
+          <div class="nm">${esc(who)} <span style="color:var(--mut);font-weight:400;font-size:13px">· ${esc(area)}</span></div>
+          <div class="meta">replied ${ago(m.created_at)}</div>
+        </div>
+        <div class="spacer"></div>
+        <span style="font-size:11px;color:var(--teal);font-weight:700">Open case ›</span>
+      </div>
+      <div class="case-body" style="margin-bottom:0">${esc(m.note)}</div>
+    </div>`;
+  }).join('');
+}
+
+// jump from a message to its case in Triage
+function jumpToCase(rid){
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+  document.querySelector('.tab[data-view="medical"]').classList.add('active');
+  document.getElementById('view-medical').classList.add('active');
+  currentView='medical';clearAlert('medical');
+  mFilter='all';
+  document.querySelectorAll('#m-filter button').forEach(x=>x.classList.remove('on'));
+  const allBtn=document.querySelector('#m-filter button[data-f="all"]'); if(allBtn)allBtn.classList.add('on');
+  render();
+  setTimeout(()=>{
+    const cards=document.querySelectorAll('#m-list .case');
+    // find the card whose add-note input id matches
+    const target=document.getElementById('note-'+rid);
+    if(target){const card=target.closest('.case'); if(card){card.scrollIntoView({behavior:'smooth',block:'center'});card.style.boxShadow='0 0 0 2px var(--teal)';setTimeout(()=>card.style.boxShadow='',2000);}}
+  },100);
+}
 
 // PLAYER RECORDS (medical/coach full file per player)
 document.getElementById('rec-name').onchange=loadRecord;
@@ -662,7 +742,20 @@ function enterApp(){
 }
 
 loadSquad().then(loadReports);
-setInterval(loadReports,15000);
+setInterval(loadReports,15000); // fallback poll
+
+// ---- REALTIME: instant updates ----
+function initRealtimeMedical(){
+  if(!window.supabase)return;
+  const sbClient=window.supabase.createClient(SB_URL,SB_KEY);
+  let t=null;
+  const nudge=()=>{ clearTimeout(t); t=setTimeout(loadReports,250); }; // debounce bursts
+  sbClient.channel('medical-live')
+    .on('postgres_changes',{event:'*',schema:'public',table:'injury_updates'},nudge)
+    .on('postgres_changes',{event:'*',schema:'public',table:'injury_reports'},nudge)
+    .subscribe();
+}
+initRealtimeMedical();
 </script>
 
 <script>

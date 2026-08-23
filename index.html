@@ -213,6 +213,7 @@
     <button class="tab" data-view="medical">Medical Triage<span class="badge" id="badge-medical"></span></button>
     <button class="tab" data-view="messages">Player Messages<span class="badge" id="badge-messages"></span></button>
     <button class="tab" data-view="records">Player Records</button>
+    <button class="tab" data-view="activation">App Activation<span class="badge" id="badge-activation"></span></button>
   </div>
 
   <!-- PLAYER -->
@@ -310,6 +311,25 @@
     <h2>Player messages</h2>
     <p style="color:var(--mut);font-size:13px;margin:-6px 0 16px;line-height:1.5">Replies and updates sent by players from their app. Tap one to open the case in Triage.</p>
     <div id="msg-list"></div>
+  </div>
+
+  <!-- APP ACTIVATION -->
+  <div class="view" id="view-activation">
+    <h2>Squad app activation</h2>
+    <p style="color:var(--mut);font-size:13px;margin:-6px 0 16px;line-height:1.5">Who has opened the player app and selected their name. Not-yet-activated players are listed first — that's your chase list.</p>
+    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
+      <b id="act-done" style="font-size:30px;line-height:1">–</b>
+      <span id="act-tot" style="color:var(--mut);font-size:14px">of – activated</span>
+    </div>
+    <div style="height:9px;background:var(--line);border-radius:99px;overflow:hidden;margin-bottom:16px">
+      <div id="act-fill" style="height:100%;background:var(--green);width:0;transition:width .5s"></div>
+    </div>
+    <div class="filterbar" id="act-filter">
+      <button class="on" data-af="all" onclick="setActFilter(this)">All</button>
+      <button data-af="no" onclick="setActFilter(this)">Not activated</button>
+      <button data-af="yes" onclick="setActFilter(this)">Activated</button>
+    </div>
+    <div id="act-list"></div>
   </div>
 </div>
 </div>
@@ -747,7 +767,8 @@ setInterval(loadReports,15000); // fallback poll
 // ---- REALTIME: instant updates ----
 function initRealtimeMedical(){
   if(!window.supabase)return;
-  const sbClient=window.supabase.createClient(SB_URL,SB_KEY);
+  window.sbShared=window.sbShared||window.supabase.createClient(SB_URL,SB_KEY);
+  const sbClient=window.sbShared;
   let t=null;
   const nudge=()=>{ clearTimeout(t); t=setTimeout(loadReports,250); }; // debounce bursts
   sbClient.channel('medical-live')
@@ -756,6 +777,60 @@ function initRealtimeMedical(){
     .subscribe();
 }
 initRealtimeMedical();
+
+// ---- APP ACTIVATION TRACKER ----
+let actSquad=[], actMap={}, actFilter='all';
+function actAgo(ts){if(!ts)return'';const s=(Date.now()-new Date(ts))/1000;if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';return Math.floor(s/86400)+'d ago';}
+function setActFilter(btn){
+  actFilter=btn.dataset.af;
+  document.querySelectorAll('#act-filter button').forEach(b=>b.classList.toggle('on',b===btn));
+  renderActivation();
+}
+async function loadActivations(){
+  try{
+    const [sq,ac]=await Promise.all([
+      fetch(SB_URL+"/rest/v1/squad_players?select=player_name,data&order=player_name.asc",{headers:H}).then(r=>r.json()),
+      fetch(SB_URL+"/rest/v1/player_activations?select=player_name,activated_at",{headers:H}).then(r=>r.json())
+    ]);
+    actSquad=(sq||[]).filter(p=>!(p.data&&p.data.archived));
+    actMap={};(ac||[]).forEach(a=>actMap[a.player_name]=a);
+    renderActivation();
+  }catch(e){}
+}
+function renderActivation(){
+  const total=actSquad.length, done=actSquad.filter(p=>actMap[p.player_name]).length;
+  const dEl=document.getElementById('act-done'); if(!dEl)return;
+  dEl.textContent=done;
+  document.getElementById('act-tot').textContent='of '+total+' activated';
+  document.getElementById('act-fill').style.width=total?(done/total*100)+'%':'0';
+  const badge=document.getElementById('badge-activation');
+  if(badge){const miss=total-done; badge.textContent=miss>0?miss:''; badge.style.display=miss>0?'':'none';}
+  let rows=actSquad.map(p=>({name:p.player_name,pos:(p.data&&p.data.position)||'',act:actMap[p.player_name]}));
+  if(actFilter==='no')rows=rows.filter(r=>!r.act);
+  if(actFilter==='yes')rows=rows.filter(r=>r.act);
+  if(actFilter==='all')rows.sort((a,b)=>(a.act?1:0)-(b.act?1:0)||a.name.localeCompare(b.name));
+  const L=document.getElementById('act-list');
+  if(!rows.length){L.innerHTML='<p style="color:var(--mut);padding:20px 0">Nobody here.</p>';return;}
+  L.innerHTML=rows.map(r=>{
+    const yes=!!r.act;
+    return '<div style="display:flex;align-items:center;gap:12px;padding:11px 14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:8px">'
+      +'<span style="width:10px;height:10px;border-radius:99px;flex:0 0 auto;background:'+(yes?'var(--green)':'#33454d')+(yes?';box-shadow:0 0 0 4px rgba(46,193,107,.15)':'')+'"></span>'
+      +'<span style="flex:1;font-weight:600">'+esc(r.name)+'</span>'
+      +(r.pos?'<span class="pill pending">'+esc(r.pos)+'</span>':'')
+      +'<span style="font-size:12px;min-width:74px;text-align:right;color:'+(yes?'var(--green)':'var(--mut)')+'">'+(yes?('✓ '+actAgo(r.act.activated_at)):'—')+'</span>'
+      +'</div>';
+  }).join('');
+}
+loadActivations();
+setInterval(loadActivations,60000);
+// live update when a player activates
+if(window.supabase){
+  window.sbShared=window.sbShared||window.supabase.createClient(SB_URL,SB_KEY);
+  window.sbShared
+    .channel('activation-live')
+    .on('postgres_changes',{event:'*',schema:'public',table:'player_activations'},loadActivations)
+    .subscribe();
+}
 </script>
 
 <script>

@@ -33,8 +33,9 @@
   .headright{display:flex;align-items:center;}
   .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
   .dot.off{background:var(--red);box-shadow:0 0 8px var(--red)}
-  .tabs{display:flex;gap:4px;background:var(--panel2);padding:4px;border-radius:12px;border:1px solid var(--line);margin-bottom:22px}
-  .tab{flex:1;padding:11px 8px;border:none;background:transparent;color:var(--mut);font-weight:600;font-size:13px;border-radius:9px;cursor:pointer;transition:.15s;letter-spacing:.3px;position:relative}
+  .tabs{display:flex;gap:4px;background:var(--panel2);padding:4px;border-radius:12px;border:1px solid var(--line);margin-bottom:22px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tab{flex:1 0 auto;white-space:nowrap;padding:11px 8px;border:none;background:transparent;color:var(--mut);font-weight:600;font-size:13px;border-radius:9px;cursor:pointer;transition:.15s;letter-spacing:.3px;position:relative}
   .tab.active{background:var(--teal);color:#001a17}
   .tab:not(.active):hover{color:var(--ink)}
   .tab .badge{position:absolute;top:3px;right:6px;min-width:17px;height:17px;padding:0 4px;background:var(--red);color:#fff;font-size:10px;font-weight:800;border-radius:9px;display:none;align-items:center;justify-content:center;line-height:1;box-shadow:0 0 8px rgba(255,59,86,.7)}
@@ -370,6 +371,7 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
   t.classList.add('active');document.getElementById('view-'+t.dataset.view).classList.add('active');
+  t.scrollIntoView({inline:'center',block:'nearest',behavior:'smooth'});
   currentView=t.dataset.view;
   if(currentView!=='player'){clearAlert(currentView);render();}
 });

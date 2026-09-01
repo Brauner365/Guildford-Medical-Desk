@@ -519,7 +519,7 @@ async function addNote(id){
   try{
     const r=await fetch(SB_URL+"/rest/v1/injury_updates",{method:"POST",headers:H,
       body:JSON.stringify({report_id:id,author:who,author_role:role,note:tx})});
-    if(!r.ok)throw 0;inp.value='';loadReports();
+    if(!r.ok)throw 0;inp.value='';inp.blur();loadReports();
   }catch(e){toast('Note failed',true);}
 }
 
@@ -606,7 +606,34 @@ function renderMedical(){
   }).join('');
 }
 
-function render(){renderCoach();renderMedical();renderMessages();}
+let _pendingRender=false;
+// Preserve any text the user is mid-typing in a note box, and defer the
+// whole re-render while a note input is focused, so a background refresh
+// (15s poll or realtime nudge) can never wipe what you're typing.
+function _noteDraphts(){
+  const d={};
+  document.querySelectorAll('.addnote input').forEach(i=>{ if(i.value) d[i.id]=i.value; });
+  return d;
+}
+function _restoreNoteDrafts(d,focusId,caret){
+  Object.keys(d).forEach(id=>{ const el=document.getElementById(id); if(el) el.value=d[id]; });
+  if(focusId){ const el=document.getElementById(focusId); if(el){ el.focus(); try{el.setSelectionRange(caret,caret);}catch(e){} } }
+}
+function render(){
+  const ae=document.activeElement;
+  const typingId=(ae&&ae.classList&&ae.classList.contains&&ae.tagName==='INPUT'&&ae.closest&&ae.closest('.addnote'))?ae.id:null;
+  // If the user is actively typing in a note box, defer this refresh entirely.
+  if(typingId){ _pendingRender=true; return; }
+  const drafts=_noteDraphts();
+  renderCoach();renderMedical();renderMessages();
+  _restoreNoteDrafts(drafts,null,0);
+}
+// When a note box loses focus, flush any refresh we held back.
+document.addEventListener('focusout',e=>{
+  if(e.target&&e.target.closest&&e.target.closest('.addnote')&&_pendingRender){
+    _pendingRender=false; setTimeout(render,150);
+  }
+});
 
 // PLAYER MESSAGES view — all player replies, newest first, jump to case
 function renderMessages(){

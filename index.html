@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0a0e11">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -95,8 +98,8 @@
   .case-body{font-size:13px;color:#c3d2d8;line-height:1.5;margin-bottom:12px}
   .case-body b{color:var(--ink);font-weight:600}
   .painbadge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:var(--panel2);color:var(--amber);margin-left:6px}
-  .ctrl{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding-top:12px;border-top:1px solid var(--line)}
-  .ctrl select{padding:9px;font-size:13px}
+  .ctrl{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;padding-top:12px;border-top:1px solid var(--line)}
+  .ctrl select,.ctrl input{padding:9px;font-size:13px}
   .thread{margin-top:12px;border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:8px}
   .note{background:var(--panel2);border-radius:8px;padding:9px 12px;font-size:12px}
   .note .au{font-weight:700;color:var(--teal);font-size:11px}
@@ -506,11 +509,46 @@ document.getElementById('p-submit').onclick=async()=>{
   btn.disabled=false;btn.textContent='Send to medical & coaches';
 };
 
+// ---- Offline write-queue ----
+// If a change can't reach Supabase (network blip), it's saved on the device and
+// retried automatically when the connection returns — so a physio's edit is never
+// silently lost. Nothing here touches existing data; it only re-sends pending writes.
+const OUTBOX_KEY='gfc_med_outbox_v1';
+function outboxGet(){ try{ return JSON.parse(localStorage.getItem(OUTBOX_KEY))||[]; }catch(e){ return []; } }
+function outboxSet(q){ try{ localStorage.setItem(OUTBOX_KEY, JSON.stringify(q)); }catch(e){} }
+function outboxAdd(item){ const q=outboxGet(); q.push(item); outboxSet(q); updateOutboxBadge(); }
+function updateOutboxBadge(){
+  const n=outboxGet().length;
+  const el=document.getElementById('syncTxt');
+  if(el && n>0){ el.textContent=n+' change'+(n>1?'s':'')+' pending — will sync'; }
+}
+async function outboxFlush(){
+  let q=outboxGet(); if(!q.length) return;
+  const remaining=[];
+  for(const item of q){
+    try{
+      const r=await fetch(item.url,{method:item.method,headers:H,body:JSON.stringify(item.body)});
+      if(!r.ok) throw 0;
+    }catch(e){ remaining.push(item); }
+  }
+  outboxSet(remaining); updateOutboxBadge();
+  if(remaining.length===0){ toast('Pending changes synced'); loadReports(); }
+}
+window.addEventListener('online', outboxFlush);
+setInterval(function(){ if(navigator.onLine) outboxFlush(); }, 15000);
+
 async function patch(id,fields){
+  // Stamp who made the change and when, so status/availability/date edits are attributed.
+  const who=(document.getElementById('m-who')||{}).value||'';
+  const body=Object.assign({}, fields, { updated_by:who, updated_at:new Date().toISOString() });
+  const url=SB_URL+"/rest/v1/injury_reports?id=eq."+id;
   try{
-    const r=await fetch(SB_URL+"/rest/v1/injury_reports?id=eq."+id,{method:"PATCH",headers:H,body:JSON.stringify(fields)});
+    const r=await fetch(url,{method:"PATCH",headers:H,body:JSON.stringify(body)});
     if(!r.ok)throw 0;loadReports();
-  }catch(e){toast('Update failed',true);}
+  }catch(e){
+    outboxAdd({url:url,method:"PATCH",body:body});
+    toast('Offline — change saved, will sync when back online');
+  }
 }
 
 async function addNote(id){
@@ -518,11 +556,16 @@ async function addNote(id){
   const who=document.getElementById('m-who').value;
   const COACHES=['Carl','Steve','Eddie'];
   const role=who==='Martyn'?'owner':(COACHES.includes(who)?'coach':'medical');
+  const url=SB_URL+"/rest/v1/injury_updates";
+  const body={report_id:id,author:who,author_role:role,note:tx};
   try{
-    const r=await fetch(SB_URL+"/rest/v1/injury_updates",{method:"POST",headers:H,
-      body:JSON.stringify({report_id:id,author:who,author_role:role,note:tx})});
+    const r=await fetch(url,{method:"POST",headers:H,body:JSON.stringify(body)});
     if(!r.ok)throw 0;inp.value='';inp.blur();loadReports();
-  }catch(e){toast('Note failed',true);}
+  }catch(e){
+    outboxAdd({url:url,method:"POST",body:body});
+    inp.value='';inp.blur();
+    toast('Offline — note saved, will sync when back online');
+  }
 }
 
 // COACH view
@@ -563,7 +606,15 @@ document.querySelectorAll('#m-filter button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#m-filter button').forEach(x=>x.classList.remove('on'));
   b.classList.add('on');mFilter=b.dataset.f;render();
 });
-document.getElementById('m-who').onchange=render;
+// Remember who's signed in on this device, so the "Signed in as" field
+// (used for injury dates, follow-ups and notes) no longer always resets to Carl.
+(function(){
+  const sel=document.getElementById('m-who');
+  const saved=localStorage.getItem('gfc_med_who');
+  if(saved && [...sel.options].some(o=>o.value===saved)) sel.value=saved;
+  sel.addEventListener('change',()=>{ localStorage.setItem('gfc_med_who',sel.value); });
+})();
+document.getElementById('m-who').onchange=function(){ localStorage.setItem('gfc_med_who',this.value); render(); };
 
 function matchFilter(r){
   if(mFilter==='all')return true;
@@ -589,13 +640,14 @@ function renderMedical(){
         ${photoHTML(r.player_name)}
         <div>
           <div class="nm">${esc(r.player_name)}${isHead(r.body_area)?'<span class="headflag" title="Head injury — follow return-to-play protocol">HEAD</span>':''} <span style="color:var(--mut);font-weight:400;font-size:13px">· ${esc(roster[r.player_name]||'—')}</span></div>
-          <div class="meta">${esc(r.body_area||'')} ${r.date_of_injury?'· injured '+r.date_of_injury:''} · reported ${ago(r.created_at)}</div>
+          <div class="meta">${esc(r.body_area||'')} ${r.date_of_injury?'· injured '+r.date_of_injury:''} · reported ${ago(r.created_at)}${r.updated_by?' · last updated by '+esc(r.updated_by)+' '+ago(r.updated_at):''}</div>
         </div>
         <div class="spacer"></div>
         <span class="pill ${r.availability}">${AVAIL_LABEL[r.availability]}</span>
       </div>
       <div class="case-body">${esc(r.description)||'<i style="color:var(--mut2)">No description given</i>'}${pain}</div>
       <div class="ctrl">
+        <div><label>Date of injury</label><input type="date" value="${r.date_of_injury||''}" onchange="patch('${r.id}',{date_of_injury:this.value||null})"></div>
         <div><label>Status</label><select onchange="patch('${r.id}',{status:this.value})">${statusOpts}</select></div>
         <div><label>Availability</label><select onchange="patch('${r.id}',{availability:this.value})">${availOpts}</select></div>
       </div>
@@ -796,6 +848,8 @@ function enterApp(){
 
 loadSquad().then(loadReports);
 setInterval(loadReports,15000); // fallback poll
+if(navigator.onLine) outboxFlush(); // send any changes queued from a previous offline session
+updateOutboxBadge();
 
 // ---- REALTIME: instant updates ----
 function initRealtimeMedical(){
@@ -867,11 +921,17 @@ if(window.supabase){
 </script>
 
 <script>
-// Minimal service worker (as a blob) so the app is installable & launches offline-tolerant.
+// Keep the app always-fresh, no manual hard-refresh needed.
+// The old throwaway service worker only ever caused stale-version problems, so we
+// remove any registered worker and rely on normal network loads + the no-cache meta
+// tags to keep everyone on the latest version. All data lives in Supabase, untouched.
 if('serviceWorker' in navigator){
-  const swCode=`self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>self.clients.claim());self.addEventListener('fetch',e=>{});`;
-  const blob=new Blob([swCode],{type:'application/javascript'});
-  navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(()=>{});
+  navigator.serviceWorker.getRegistrations().then(function(regs){
+    regs.forEach(function(r){ r.unregister(); });
+  }).catch(function(){});
+  if(window.caches && caches.keys){
+    caches.keys().then(function(keys){ keys.forEach(function(k){ caches.delete(k); }); }).catch(function(){});
+  }
 }
 </script>
 </body>

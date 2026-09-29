@@ -289,6 +289,7 @@
         <option value="Jasmine">Jasmine — Physio</option>
         <option value="Sara">Sara — Physio</option>
         <option value="Aaron Walsh">Aaron Walsh — Sports Psychologist</option>
+        <option value="Martin Farrelly">Martin Farrelly — Ops Manager</option>
       </select>
     </div>
     <div class="filterbar" id="m-filter">
@@ -552,7 +553,7 @@ async function addNote(id){
   const inp=document.getElementById('note-'+id);const tx=inp.value.trim();if(!tx)return;
   const who=document.getElementById('m-who').value;
   const COACHES=['Carl','Steve','Eddie'];
-  const role=who==='Martyn'?'owner':(COACHES.includes(who)?'coach':'medical');
+  const role=who==='Martyn'?'owner':(who==='Martin Farrelly'?'ops':(COACHES.includes(who)?'coach':'medical'));
   const url=SB_URL+"/rest/v1/injury_updates";
   const body={report_id:id,author:who,author_role:role,note:tx};
   try{

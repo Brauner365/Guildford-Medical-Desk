@@ -277,8 +277,8 @@
   <div class="view" id="view-medical">
     <div class="alertbar" id="alert-medical" onclick="clearAlert('medical')"><span class="ab-dot"></span><span id="alert-medical-txt"></span><span class="ab-x">×</span></div>
     <div class="who">
-      <label>Signed in as</label>
-      <select id="m-who">
+      <label>Signed in as <a href="#" id="md-signout" style="float:right;color:var(--mut);font-size:12px;text-decoration:underline">Sign out</a></label>
+      <select id="m-who" disabled>
         <option value="Carl">Carl — First Team Manager</option>
         <option value="Steve">Steve — First Team Coach</option>
         <option value="Eddie">Eddie — GK Coach</option>
@@ -288,7 +288,7 @@
         <option value="Warda">Warda — Physio</option>
         <option value="Jasmine">Jasmine — Physio</option>
         <option value="Sara">Sara — Physio</option>
-        <option value="Aaron Walsh">Aaron Walsh — Sports Psychologist</option>
+        <option value="Mokshaa">Mokshaa — Physio</option>
         <option value="Martin Farrelly">Martin Farrelly — Ops Manager</option>
       </select>
     </div>
@@ -358,6 +358,7 @@ let squad=[], reports=[], notesByReport={}, painSel=null, roster={}, photos={}, 
 let seen={};              // report id -> "status|availability" last acknowledged
 let firstLoad=true;       // don't alert on the very first load of a session
 let currentView='player';
+let staffOK=false;
 let pending={coach:[],medical:[],messages:[]}; // human-readable pending alerts per tab
 let seenNotes={};         // note id -> true, for player-reply alert detection
 let firstNoteLoad=true;
@@ -374,6 +375,7 @@ document.getElementById('p-date').valueAsDate=new Date();
 
 // tabs
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  if(t.dataset.view!=='player' && !staffOK){ openStaffGate(()=>t.click()); return; }
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
   t.classList.add('active');document.getElementById('view-'+t.dataset.view).classList.add('active');
@@ -466,7 +468,7 @@ function chime(){
 async function loadSquad(){
   try{
     const r=await fetch(SB_URL+"/rest/v1/squad_players?select=player_name,squad_order,data&order=player_name.asc",{headers:H});
-    squad=await r.json();
+    squad=(await r.json()).filter(p=>!(p.data&&p.data.archived));
     const sel=document.getElementById('p-name');
     squad.forEach(p=>{roster[p.player_name]=(p.data&&p.data.position)||'';if(p.data&&(p.data.photoUrl||p.data.photo))photos[p.player_name]=p.data.photoUrl||p.data.photo;const o=document.createElement('option');o.value=p.player_name;o.textContent=p.player_name;sel.appendChild(o);const o2=o.cloneNode(true);document.getElementById('rec-name').appendChild(o2);});
     sync(true);
@@ -931,6 +933,63 @@ if('serviceWorker' in navigator){
     caches.keys().then(function(keys){ keys.forEach(function(k){ caches.delete(k); }); }).catch(function(){});
   }
 }
+</script>
+
+<!-- STAFF SIGN-IN -->
+<div id="md-gate" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(5,9,11,.86);align-items:center;justify-content:center;padding:16px">
+  <div class="card" style="width:100%;max-width:340px;text-align:center">
+    <div style="font-weight:800;font-size:17px;margin-bottom:4px">Staff sign-in</div>
+    <div style="color:var(--mut);font-size:13px;margin-bottom:16px">Enter your 4-digit staff PIN to open the medical tabs.</div>
+    <input id="md-pin" type="password" inputmode="numeric" autocomplete="one-time-code" maxlength="4" placeholder="••••" style="width:100%;text-align:center;font-size:24px;letter-spacing:10px;padding:12px;margin-bottom:10px;box-sizing:border-box">
+    <div id="md-pin-err" style="color:#ff3b56;font-size:13px;min-height:18px;margin-bottom:8px"></div>
+    <button class="btn" id="md-pin-go">Sign in</button>
+    <div style="margin-top:12px"><a href="#" id="md-pin-cancel" style="color:var(--mut);font-size:13px">Cancel — back to Report</a></div>
+  </div>
+</div>
+<script>
+(function(){
+  const KEY='gfc_md_token';
+  const gate=document.getElementById('md-gate'), pin=document.getElementById('md-pin'), err=document.getElementById('md-pin-err');
+  let after=null;
+  function rpc(fn,args){return fetch(SB_URL+'/rest/v1/rpc/'+fn,{method:'POST',headers:H,body:JSON.stringify(args)}).then(r=>r.json());}
+  function store(k,v){try{v==null?localStorage.removeItem(k):localStorage.setItem(k,v);}catch(e){}}
+  function read(k){try{return localStorage.getItem(k);}catch(e){return null;}}
+  function applyStaff(name){
+    staffOK=true;
+    const sel=document.getElementById('m-who');
+    if(![...sel.options].some(o=>o.value===name)){const o=document.createElement('option');o.value=name;o.textContent=name;sel.appendChild(o);}
+    sel.value=name; sel.disabled=true; store('gfc_med_who',name);
+    document.getElementById('md-signout').style.display='';
+  }
+  function signedOut(){
+    staffOK=false; store(KEY,null);
+    document.getElementById('md-signout').style.display='none';
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+    document.querySelector('.tab[data-view="player"]').classList.add('active');
+    document.getElementById('view-player').classList.add('active');
+    currentView='player';
+  }
+  window.openStaffGate=function(cb){after=cb||null;err.textContent='';pin.value='';gate.style.display='flex';setTimeout(()=>pin.focus(),50);};
+  function close(){gate.style.display='none';}
+  function go(){
+    const p=pin.value.trim();
+    if(!/^\d{4}$/.test(p)){err.textContent='Enter your 4-digit PIN';return;}
+    err.textContent='Checking…';
+    rpc('md_staff_login',{p_pin:p}).then(r=>{
+      if(r&&r.ok){store(KEY,r.token);applyStaff(r.name);close();toast('Signed in as '+r.name);const cb=after;after=null;if(cb)cb();}
+      else{pin.value='';err.textContent=(r&&r.error==='locked')?'Too many wrong PINs. Try again in 10 minutes.':'That PIN isn’t recognised.';}
+    }).catch(()=>{err.textContent='Can’t reach the server. Check your connection.';});
+  }
+  document.getElementById('md-pin-go').onclick=go;
+  pin.addEventListener('keydown',e=>{if(e.key==='Enter')go();});
+  pin.addEventListener('input',()=>{pin.value=pin.value.replace(/\D/g,'').slice(0,4);if(pin.value.length===4)go();});
+  document.getElementById('md-pin-cancel').onclick=e=>{e.preventDefault();after=null;close();};
+  document.getElementById('md-signout').onclick=e=>{e.preventDefault();signedOut();toast('Signed out');};
+  document.getElementById('md-signout').style.display='none';
+  const t=read(KEY);
+  if(t){rpc('md_staff_check',{p_token:t}).then(r=>{if(r&&r.ok)applyStaff(r.name);else store(KEY,null);}).catch(()=>{});}
+})();
 </script>
 </body>
 </html>
